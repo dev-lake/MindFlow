@@ -1,0 +1,41 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="url(#gradient1)"/>
+
+  <!-- Central node -->
+  <circle cx="256" cy="256" r="40" fill="white" opacity="0.95"/>
+
+  <!-- Flow lines and nodes -->
+  <!-- Top branch -->
+  <path d="M 256 256 Q 256 180 200 140" stroke="white" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <circle cx="200" cy="140" r="24" fill="white" opacity="0.9"/>
+
+  <!-- Top-right branch -->
+  <path d="M 256 256 Q 300 200 340 160" stroke="white" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <circle cx="340" cy="160" r="24" fill="white" opacity="0.9"/>
+
+  <!-- Right branch -->
+  <path d="M 256 256 Q 320 256 380 240" stroke="white" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <circle cx="380" cy="240" r="24" fill="white" opacity="0.9"/>
+
+  <!-- Bottom-right branch -->
+  <path d="M 256 256 Q 300 300 340 360" stroke="white" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <circle cx="340" cy="360" r="24" fill="white" opacity="0.9"/>
+
+  <!-- Bottom branch -->
+  <path d="M 256 256 Q 256 320 220 380" stroke="white" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <circle cx="220" cy="380" r="24" fill="white" opacity="0.9"/>
+
+  <!-- Left branch -->
+  <path d="M 256 256 Q 200 260 140 280" stroke="white" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <circle cx="140" cy="280" r="24" fill="white" opacity="0.9"/>
+
+  <!-- Gradient definition -->
+  <defs>
+    <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#8B5CF6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#EC4899;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+</svg>
