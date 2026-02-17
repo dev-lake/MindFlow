@@ -1,21 +1,26 @@
 import { ModelConfig, AIMessage } from '../types';
 
+export interface AIResponse {
+  content: string;
+  thinkingContent?: string;
+}
+
 export interface AIProvider {
   sendMessage(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string>;
+  ): Promise<AIResponse>;
 }
 
 class OpenAIProvider implements AIProvider {
   async sendMessage(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     if (!config.apiKey) {
       throw new Error('OpenAI API key is required');
     }
@@ -63,7 +68,7 @@ class OpenAIProvider implements AIProvider {
               const content = parsed.choices[0]?.delta?.content;
               if (content) {
                 fullContent += content;
-                onChunk(content);
+                onChunk(content, 'content');
               }
             } catch (e) {
               // 忽略解析错误
@@ -72,12 +77,12 @@ class OpenAIProvider implements AIProvider {
         }
       }
 
-      return fullContent;
+      return { content: fullContent };
     }
 
     // 非流式响应
     const data = await response.json();
-    return data.choices[0].message.content;
+    return { content: data.choices[0].message.content };
   }
 }
 
@@ -85,9 +90,9 @@ class AnthropicProvider implements AIProvider {
   async sendMessage(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     if (!config.apiKey) {
       throw new Error('Anthropic API key is required');
     }
@@ -118,6 +123,8 @@ class AnthropicProvider implements AIProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullContent = '';
+      let thinkingContent = '';
+      let currentBlockType: 'thinking' | 'text' | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -132,10 +139,28 @@ class AnthropicProvider implements AIProvider {
 
             try {
               const parsed = JSON.parse(data);
+
+              // 检测内容块开始
+              if (parsed.type === 'content_block_start') {
+                currentBlockType = parsed.content_block?.type === 'thinking' ? 'thinking' : 'text';
+              }
+
+              // 处理内容块增量
               if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
                 const content = parsed.delta.text;
-                fullContent += content;
-                onChunk(content);
+
+                if (currentBlockType === 'thinking') {
+                  thinkingContent += content;
+                  onChunk(content, 'thinking');
+                } else {
+                  fullContent += content;
+                  onChunk(content, 'content');
+                }
+              }
+
+              // 内容块结束
+              if (parsed.type === 'content_block_stop') {
+                currentBlockType = null;
               }
             } catch (e) {
               // 忽略解析错误
@@ -144,12 +169,21 @@ class AnthropicProvider implements AIProvider {
         }
       }
 
-      return fullContent;
+      return {
+        content: fullContent,
+        thinkingContent: thinkingContent || undefined,
+      };
     }
 
     // 非流式响应
     const data = await response.json();
-    return data.content[0].text;
+    const textContent = data.content.find((block: any) => block.type === 'text');
+    const thinkingBlock = data.content.find((block: any) => block.type === 'thinking');
+
+    return {
+      content: textContent?.text || '',
+      thinkingContent: thinkingBlock?.thinking || undefined,
+    };
   }
 }
 
@@ -157,9 +191,9 @@ class DeepSeekProvider implements AIProvider {
   async sendMessage(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     if (!config.apiKey) {
       throw new Error('DeepSeek API key is required');
     }
@@ -189,6 +223,7 @@ class DeepSeekProvider implements AIProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullContent = '';
+      let thinkingContent = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -205,9 +240,15 @@ class DeepSeekProvider implements AIProvider {
             try {
               const parsed = JSON.parse(data);
               const content = parsed.choices[0]?.delta?.content;
+              const reasoning = parsed.choices[0]?.delta?.reasoning_content;
+
+              if (reasoning) {
+                thinkingContent += reasoning;
+                onChunk(reasoning, 'thinking');
+              }
               if (content) {
                 fullContent += content;
-                onChunk(content);
+                onChunk(content, 'content');
               }
             } catch (e) {
               // 忽略解析错误
@@ -216,12 +257,18 @@ class DeepSeekProvider implements AIProvider {
         }
       }
 
-      return fullContent;
+      return {
+        content: fullContent,
+        thinkingContent: thinkingContent || undefined,
+      };
     }
 
     // 非流式响应
     const data = await response.json();
-    return data.choices[0].message.content;
+    return {
+      content: data.choices[0].message.content,
+      thinkingContent: data.choices[0].message.reasoning_content || undefined,
+    };
   }
 }
 
@@ -229,9 +276,9 @@ class LocalProvider implements AIProvider {
   async sendMessage(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     const baseURL = config.baseURL || 'http://localhost:11434';
 
     const response = await fetch(`${baseURL}/api/chat`, {
@@ -270,7 +317,7 @@ class LocalProvider implements AIProvider {
             const content = parsed.message?.content;
             if (content) {
               fullContent += content;
-              onChunk(content);
+              onChunk(content, 'content');
             }
           } catch (e) {
             // 忽略解析错误
@@ -278,12 +325,12 @@ class LocalProvider implements AIProvider {
         }
       }
 
-      return fullContent;
+      return { content: fullContent };
     }
 
     // 非流式响应
     const data = await response.json();
-    return data.message.content;
+    return { content: data.message.content };
   }
 }
 
@@ -291,9 +338,9 @@ class CustomProvider implements AIProvider {
   async sendMessage(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     if (!config.baseURL) {
       throw new Error('自定义服务商需要配置 API 地址');
     }
@@ -316,9 +363,9 @@ class CustomProvider implements AIProvider {
   private async sendOpenAICompatible(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -366,7 +413,7 @@ class CustomProvider implements AIProvider {
               const content = parsed.choices[0]?.delta?.content;
               if (content) {
                 fullContent += content;
-                onChunk(content);
+                onChunk(content, 'content');
               }
             } catch (e) {
               // 忽略解析错误
@@ -375,19 +422,19 @@ class CustomProvider implements AIProvider {
         }
       }
 
-      return fullContent;
+      return { content: fullContent };
     }
 
     const data = await response.json();
-    return data.choices[0].message.content;
+    return { content: data.choices[0].message.content };
   }
 
   private async sendAnthropicCompatible(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'anthropic-version': '2023-06-01',
@@ -418,6 +465,8 @@ class CustomProvider implements AIProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullContent = '';
+      let thinkingContent = '';
+      let currentBlockType: 'thinking' | 'text' | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -432,10 +481,25 @@ class CustomProvider implements AIProvider {
 
             try {
               const parsed = JSON.parse(data);
+
+              if (parsed.type === 'content_block_start') {
+                currentBlockType = parsed.content_block?.type === 'thinking' ? 'thinking' : 'text';
+              }
+
               if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
                 const content = parsed.delta.text;
-                fullContent += content;
-                onChunk(content);
+
+                if (currentBlockType === 'thinking') {
+                  thinkingContent += content;
+                  onChunk(content, 'thinking');
+                } else {
+                  fullContent += content;
+                  onChunk(content, 'content');
+                }
+              }
+
+              if (parsed.type === 'content_block_stop') {
+                currentBlockType = null;
               }
             } catch (e) {
               // 忽略解析错误
@@ -444,19 +508,28 @@ class CustomProvider implements AIProvider {
         }
       }
 
-      return fullContent;
+      return {
+        content: fullContent,
+        thinkingContent: thinkingContent || undefined,
+      };
     }
 
     const data = await response.json();
-    return data.content[0].text;
+    const textContent = data.content.find((block: any) => block.type === 'text');
+    const thinkingBlock = data.content.find((block: any) => block.type === 'thinking');
+
+    return {
+      content: textContent?.text || '',
+      thinkingContent: thinkingBlock?.thinking || undefined,
+    };
   }
 
   private async sendOllamaCompatible(
     messages: AIMessage[],
     config: ModelConfig,
-    onChunk?: (chunk: string) => void,
+    onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<AIResponse> {
     const response = await fetch(`${config.baseURL}/api/chat`, {
       method: 'POST',
       headers: {
@@ -492,7 +565,7 @@ class CustomProvider implements AIProvider {
             const content = parsed.message?.content;
             if (content) {
               fullContent += content;
-              onChunk(content);
+              onChunk(content, 'content');
             }
           } catch (e) {
             // 忽略解析错误
@@ -500,11 +573,11 @@ class CustomProvider implements AIProvider {
         }
       }
 
-      return fullContent;
+      return { content: fullContent };
     }
 
     const data = await response.json();
-    return data.message.content;
+    return { content: data.message.content };
   }
 }
 
@@ -519,9 +592,9 @@ export const aiProviders = {
 export async function sendAIMessage(
   messages: AIMessage[],
   config: ModelConfig,
-  onChunk?: (chunk: string) => void,
+  onChunk?: (chunk: string, type?: 'thinking' | 'content') => void,
   abortSignal?: AbortSignal
-): Promise<string> {
+): Promise<AIResponse> {
   const provider = aiProviders[config.provider];
   if (!provider) {
     throw new Error(`Unknown provider: ${config.provider}`);

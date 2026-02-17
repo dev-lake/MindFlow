@@ -4,7 +4,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { ModelConfig } from '../../types';
 
 export function Sidebar() {
-  const { modelConfigs, defaultModelConfig, createModelConfig, updateModelConfig, deleteModelConfig, setDefaultModel, closeSettings } = useSettingsStore();
+  const { modelConfigs, createModelConfig, updateModelConfig, deleteModelConfig, setDefaultModel, closeSettings } = useSettingsStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);

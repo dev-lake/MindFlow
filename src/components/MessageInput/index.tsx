@@ -105,7 +105,7 @@ export function MessageInput() {
       const aiNode: ChatNode = {
         id: aiNodeId,
         type: 'assistant',
-        content: aiResponse,
+        content: aiResponse.content,
         parentId: userNodeId,
         children: [],
         model: `${modelToUse.provider}:${modelToUse.model}`,

@@ -21,6 +21,8 @@ export interface ChatNode {
   assistantMessage?: string;
   // 引用内容
   quotedContent?: QuotedContent;
+  // 思考过程
+  thinkingContent?: string;
 }
 
 // 聊天会话类型定义

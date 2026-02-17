@@ -10,7 +10,7 @@ import ReactFlow, {
   useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, RefreshCw } from 'lucide-react';
 import { useChatStore } from '../../stores/chatStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { ChatNodeComponent } from '../ChatNode';
@@ -20,11 +20,12 @@ const nodeTypes = {
 };
 
 export function FlowCanvas() {
-  const { currentSession, selectedNodeId, selectNode, updateSessionDefaultModel } = useChatStore();
+  const { currentSession, selectedNodeId, selectNode, updateSessionDefaultModel, rearrangeNodes } = useChatStore();
   const { modelConfigs, defaultModelConfig } = useSettingsStore();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [isRearranging, setIsRearranging] = useState(false);
   const reactFlowInstance = useReactFlow();
   const prevNodeCountRef = useRef(0);
 
@@ -96,11 +97,17 @@ export function FlowCanvas() {
     [selectNode]
   );
 
+  const handleRearrange = async () => {
+    setIsRearranging(true);
+    await rearrangeNodes();
+    setIsRearranging(false);
+  };
+
   return (
     <div className="w-full h-full relative">
       {/* 会话模型选择器 - 左上角 */}
       {currentSession && (
-        <div className="absolute top-4 left-4 z-10">
+        <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
           <div className="relative">
             <button
               onClick={() => setShowModelSelector(!showModelSelector)}
@@ -148,6 +155,17 @@ export function FlowCanvas() {
               </>
             )}
           </div>
+
+          {/* 重新排列按钮 */}
+          <button
+            onClick={handleRearrange}
+            disabled={isRearranging}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-white hover:bg-gray-50 rounded transition-colors text-xs text-gray-700 font-medium shadow-sm border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="重新排列节点"
+          >
+            <RefreshCw size={12} className={isRearranging ? 'animate-spin' : ''} />
+            <span>{isRearranging ? '排列中...' : '重新排列'}</span>
+          </button>
         </div>
       )}
 

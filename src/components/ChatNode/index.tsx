@@ -7,6 +7,7 @@ import { ChatNode as ChatNodeType, ModelConfig } from '../../types';
 import { useChatStore } from '../../stores/chatStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { sendAIMessage } from '../../services/ai';
+import { estimateNodeHeight } from '../../utils/layoutUtils';
 
 interface ChatNodeData {
   node: ChatNodeType;
@@ -24,6 +25,10 @@ export const ChatNodeComponent = memo(({ data }: NodeProps<ChatNodeData>) => {
   const [isHovering, setIsHovering] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ModelConfig | null>(null);
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
+  const [isThinkingInProgress, setIsThinkingInProgress] = useState(false);
+  const [isUserMessageCollapsed, setIsUserMessageCollapsed] = useState(false);
+  const [isAssistantMessageCollapsed, setIsAssistantMessageCollapsed] = useState(false);
   const nodeRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -210,83 +215,39 @@ export const ChatNodeComponent = memo(({ data }: NodeProps<ChatNodeData>) => {
     const existingChildren = node.children || [];
     const childrenCount = existingChildren.length;
 
-    // 计算父节点高度
-    let parentNodeHeight = 300; // 默认高度
-    if (node.type === 'conversation') {
-      // 对话节点需要计算用户消息和AI回复的内容高度
-      const estimateContentHeight = (text: string): number => {
-        if (!text) return 0;
-        const lines = text.split('\n');
-        let totalHeight = 0;
-        for (const line of lines) {
-          if (line.trim() === '') {
-            totalHeight += 24;
-          } else if (line.startsWith('#')) {
-            totalHeight += 36;
-          } else if (line.startsWith('```')) {
-            continue;
-          } else {
-            const lineLength = line.length;
-            const wrappedLines = Math.ceil(lineLength / 60);
-            totalHeight += wrappedLines * 24;
-          }
-        }
-        const codeBlocks = (text.match(/```[\s\S]*?```/g) || []);
-        codeBlocks.forEach(block => {
-          const blockLines = block.split('\n').length;
-          totalHeight += blockLines * 20 + 32;
-        });
-        return totalHeight;
-      };
-
-      const userHeight = estimateContentHeight(node.userMessage || '');
-      const assistantHeight = estimateContentHeight(node.assistantMessage || '');
-      parentNodeHeight = 120 + userHeight + assistantHeight + 100;
-    } else if (node.type === 'input') {
-      parentNodeHeight = 300;
-    } else {
-      parentNodeHeight = 200;
-    }
+    // 使用统一的高度估算函数
+    const parentNodeHeight = estimateNodeHeight(node);
 
     // 默认位置：X轴与父节点相同，Y轴在父节点下方（父节点高度 + 间距）
     let newX = node.position.x;
-    let newY = node.position.y + parentNodeHeight + 50;
+    let newY = node.position.y + parentNodeHeight + 80;
 
     // 如果已有子节点，找到最下方的子节点位置
-    if (childrenCount > 0) {
+    if (childrenCount > 0 && currentSession) {
       let maxY = node.position.y;
-      let maxYChild: ChatNodeType | null = null;
+      let maxYChildNode: ChatNodeType | null = null;
 
       existingChildren.forEach(childId => {
         const child = currentSession.nodes[childId];
         if (child && child.position.y > maxY) {
           maxY = child.position.y;
-          maxYChild = child;
+          maxYChildNode = child;
         }
       });
 
-      // 估算最下方子节点的高度
-      let estimatedHeight = 300; // 默认高度
-      if (maxYChild) {
-        if (maxYChild.type === 'conversation') {
-          // 对话节点通常较高，估算为600px
-          estimatedHeight = 600;
-        } else if (maxYChild.type === 'input') {
-          // 输入节点高度约300px
-          estimatedHeight = 300;
-        } else {
-          // 其他节点较小
-          estimatedHeight = 200;
-        }
+      if (maxYChildNode) {
+        // 使用统一的高度估算函数
+        const estimatedHeight = estimateNodeHeight(maxYChildNode);
+
+        // 新节点放在最下方子节点下方，加上估算高度和额外间距
+        newY = maxY + estimatedHeight + 100;
+
+        // X轴根据子节点数量偏移，避免与父节点重叠
+        // 使用更大的偏移量，确保节点不会重叠
+        const baseXOffset = 400;
+        const offsetMultiplier = (childrenCount % 4) - 1; // -1, 0, 1, 2
+        newX = node.position.x + offsetMultiplier * baseXOffset;
       }
-
-      // 新节点放在最下方子节点下方，加上估算高度和额外间距
-      newY = maxY + estimatedHeight + 100;
-
-      // X轴根据子节点数量偏移，避免与父节点重叠
-      // 使用 (childrenCount % 3) + 1 确保至少有一个单位的偏移
-      const baseXOffset = 300;
-      newX = node.position.x + ((childrenCount % 3) + 1) * baseXOffset;
     }
 
     const newInputNode: ChatNodeType = {
@@ -339,6 +300,7 @@ export const ChatNodeComponent = memo(({ data }: NodeProps<ChatNodeData>) => {
     // 将这些变量提升到外层作用域，以便在 catch 块中访问
     let conversationNodeId: string = '';
     let streamedContent = '';
+    let streamedThinking = '';
     let baseY: number = 0;
     let shouldCreateInputNode = false;
 
@@ -435,19 +397,35 @@ ${userMessage}`;
       messages.push({ role: 'user', content: finalUserMessage });
 
       // 调用AI API，使用流式响应
-      await sendAIMessage(messages, modelToUse, (chunk) => {
-        streamedContent += chunk;
-        // 实时更新节点内容（不保存到数据库）
-        updateNode(conversationNodeId, {
-          assistantMessage: streamedContent,
-        }, false);
+      const response = await sendAIMessage(messages, modelToUse, (chunk, type) => {
+        if (type === 'thinking') {
+          streamedThinking += chunk;
+          // 思考过程开始时自动展开
+          setShowThinking(true);
+          setIsThinkingInProgress(true);
+          // 实时更新思考过程（不保存到数据库）
+          updateNode(conversationNodeId, {
+            thinkingContent: streamedThinking,
+          }, false);
+        } else {
+          streamedContent += chunk;
+          // 实时更新节点内容（不保存到数据库）
+          updateNode(conversationNodeId, {
+            assistantMessage: streamedContent,
+          }, false);
+        }
       }, abortControllerRef.current.signal);
 
       // 最终更新时间戳并保存到数据库
       await updateNode(conversationNodeId, {
-        assistantMessage: streamedContent,
+        assistantMessage: response.content,
+        thinkingContent: response.thinkingContent,
         timestamp: Date.now(),
       }, true);
+
+      // 思考完成后自动折叠
+      setIsThinkingInProgress(false);
+      setShowThinking(false);
 
       // 标记需要创建输入节点
       shouldCreateInputNode = true;
@@ -525,11 +503,15 @@ ${userMessage}`;
           const contentWithStopMark = streamedContent + '\n\n---\n*[生成已停止]*';
           await updateNode(conversationNodeId, {
             assistantMessage: contentWithStopMark,
+            thinkingContent: streamedThinking || undefined,
             timestamp: Date.now(),
           }, true);
           // 标记需要创建输入节点
           shouldCreateInputNode = true;
         }
+        // 停止时也折叠思考过程
+        setIsThinkingInProgress(false);
+        setShowThinking(false);
       } else {
         console.error('Failed to send message:', error);
         alert(`发送失败: ${error instanceof Error ? error.message : '未知错误'}`);
@@ -611,6 +593,10 @@ ${userMessage}`;
   if (isConversation) {
     const hasAssistant = node.assistantMessage !== undefined && node.assistantMessage !== '';
 
+    // 判断消息是否过长（超过300字符）
+    const isUserMessageLong = (node.userMessage || '').length > 300;
+    const isAssistantMessageLong = (node.assistantMessage || '').length > 300;
+
     return (
       <div
         className="relative"
@@ -659,33 +645,89 @@ ${userMessage}`;
 
           {/* 用户消息 */}
           <div className="bg-blue-50 p-4 border-b border-gray-200">
-            <div className="text-xs text-blue-600 font-medium mb-2">
-              👤 你
+            <div className="text-xs text-blue-600 font-medium mb-2 flex items-center justify-between">
+              <span>👤 你</span>
+              {isUserMessageLong && (
+                <button
+                  onClick={() => setIsUserMessageCollapsed(!isUserMessageCollapsed)}
+                  className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                >
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform ${isUserMessageCollapsed ? '' : 'rotate-180'}`}
+                  />
+                  {isUserMessageCollapsed ? '展开' : '折叠'}
+                </button>
+              )}
             </div>
-            <div className="text-sm text-gray-800 prose prose-sm max-w-none select-text">
+            <div className={`text-sm text-gray-800 prose prose-sm max-w-none select-text ${isUserMessageCollapsed ? 'line-clamp-3' : ''}`}>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {node.userMessage || ''}
               </ReactMarkdown>
             </div>
           </div>
 
+          {/* 思考过程 */}
+          {node.thinkingContent && (
+            <div className="bg-amber-50 border-b border-amber-200">
+              <button
+                onClick={() => setShowThinking(!showThinking)}
+                className="w-full px-4 py-2 flex items-center justify-between hover:bg-amber-100 transition-colors"
+              >
+                <div className="flex items-center gap-2 text-xs text-amber-700 font-medium">
+                  <span>💭 思考过程</span>
+                  {isThinkingInProgress && (
+                    <span className="text-xs text-amber-600">(思考中...)</span>
+                  )}
+                </div>
+                <ChevronDown
+                  size={14}
+                  className={`text-amber-600 transition-transform ${showThinking || isThinkingInProgress ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {(showThinking || isThinkingInProgress) && (
+                <div className="px-4 pb-4">
+                  <div className="text-sm text-gray-700 prose prose-sm max-w-none select-text bg-white p-3 rounded border border-amber-200">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {node.thinkingContent}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* AI回复 */}
           <div className="bg-white p-4 rounded-b-lg">
             <div className="text-xs text-gray-600 font-medium mb-2 flex items-center justify-between">
               <span>🤖 {node.model || 'AI'}</span>
-              {/* 停止按钮 - 在生成过程中显示 */}
-              {isSending && (
-                <button
-                  onClick={handleStop}
-                  className="px-3 py-1.5 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors flex items-center gap-1.5 text-xs font-medium"
-                >
-                  <StopCircle size={14} />
-                  停止生成
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {isAssistantMessageLong && hasAssistant && (
+                  <button
+                    onClick={() => setIsAssistantMessageCollapsed(!isAssistantMessageCollapsed)}
+                    className="text-xs text-gray-600 hover:text-gray-700 flex items-center gap-1"
+                  >
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform ${isAssistantMessageCollapsed ? '' : 'rotate-180'}`}
+                    />
+                    {isAssistantMessageCollapsed ? '展开' : '折叠'}
+                  </button>
+                )}
+                {/* 停止按钮 - 在生成过程中显示 */}
+                {isSending && (
+                  <button
+                    onClick={handleStop}
+                    className="px-3 py-1.5 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors flex items-center gap-1.5 text-xs font-medium"
+                  >
+                    <StopCircle size={14} />
+                    停止生成
+                  </button>
+                )}
+              </div>
             </div>
             {hasAssistant ? (
-              <div className="text-sm text-gray-800 prose prose-sm max-w-none select-text">
+              <div className={`text-sm text-gray-800 prose prose-sm max-w-none select-text ${isAssistantMessageCollapsed ? 'line-clamp-5' : ''}`}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {node.assistantMessage || ''}
                 </ReactMarkdown>

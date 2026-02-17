@@ -7,7 +7,7 @@ import { useChatStore } from './stores/chatStore';
 import { useSettingsStore } from './stores/settingsStore';
 
 function App() {
-  const { currentSession, initSession } = useChatStore();
+  const { initSession } = useChatStore();
   const { isSettingsOpen, loadModelConfigs } = useSettingsStore();
 
   useEffect(() => {

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { ChatSession, ChatNode, QuotedContent } from '../types';
 import { sessionAPI } from '../services/api';
 import { useSettingsStore } from './settingsStore';
+import { autoLayout } from '../utils/layoutUtils';
 
 interface ChatStore {
   sessions: Record<string, ChatSession>;
@@ -42,6 +43,9 @@ interface ChatStore {
 
   // 获取从根到选中节点的路径
   getConversationPath: () => ChatNode[];
+
+  // 重新排列节点
+  rearrangeNodes: () => Promise<void>;
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -328,7 +332,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   saveCurrentSession: async () => {
-    const { currentSession, currentSessionId, sessions } = get();
+    const { currentSession, currentSessionId } = get();
     if (!currentSession || !currentSessionId) return;
 
     try {
@@ -354,23 +358,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     let currentId: string | null = selectedNodeId;
 
     while (currentId) {
-      const node = currentSession.nodes[currentId];
+      const node: ChatNode | undefined = currentSession.nodes[currentId];
       if (!node) break;
 
       // 对于conversation类型的节点，需要展开为用户和助手消息
       if (node.type === 'conversation' && node.userMessage && node.assistantMessage) {
         // 添加用户消息
-        path.unshift({
+        const userNode: ChatNode = {
           ...node,
           type: 'user',
           content: node.userMessage,
-        });
+        };
+        path.unshift(userNode);
+
         // 添加助手消息
-        path.unshift({
+        const assistantNode: ChatNode = {
           ...node,
           type: 'assistant',
           content: node.assistantMessage,
-        });
+        };
+        path.unshift(assistantNode);
       } else if (node.type !== 'system' && node.type !== 'input') {
         path.unshift(node);
       }
@@ -379,5 +386,40 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     return path.filter(node => node.type === 'user' || node.type === 'assistant');
+  },
+
+  rearrangeNodes: async () => {
+    const { currentSession, currentSessionId, sessions } = get();
+    if (!currentSession || !currentSessionId) return;
+
+    // 使用自动布局算法计算新位置
+    const newPositions = autoLayout(currentSession.nodes, currentSession.rootNodeId);
+
+    // 更新所有节点的位置
+    const updatedNodes = { ...currentSession.nodes };
+    Object.keys(newPositions).forEach(nodeId => {
+      if (updatedNodes[nodeId]) {
+        updatedNodes[nodeId] = {
+          ...updatedNodes[nodeId],
+          position: newPositions[nodeId],
+        };
+      }
+    });
+
+    const updatedSession = {
+      ...currentSession,
+      nodes: updatedNodes,
+      updatedAt: Date.now(),
+    };
+
+    try {
+      await sessionAPI.updateSession(updatedSession);
+      set({
+        sessions: { ...sessions, [currentSessionId]: updatedSession },
+        currentSession: updatedSession,
+      });
+    } catch (error) {
+      console.error('Failed to rearrange nodes:', error);
+    }
   },
 }));
